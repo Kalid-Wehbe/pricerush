@@ -1,0 +1,36 @@
+
+name: PriceRush Daily Automation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-automation:
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify automation scripts
+        run: |
+          node --check scripts/import-open-prices.mjs
+          node --check scripts/validate-products.mjs
+          node --check scripts/test-daily-challenge.mjs
+
+      - name: Confirm setup
+        run: echo "PriceRush automation scripts are ready!"
