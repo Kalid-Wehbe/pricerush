@@ -18,14 +18,12 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   },
 });
 
-// Return a date in YYYY-MM-DD format using UTC.
 function utcDate(offset = 0) {
   const date = new Date();
   date.setUTCDate(date.getUTCDate() + offset);
   return date.toISOString().slice(0, 10);
 }
 
-// Find a challenge for a specific date.
 async function getChallenge(date) {
   const { data, error } = await supabase
     .from("daily_challenges")
@@ -42,14 +40,59 @@ async function getChallenge(date) {
   return data;
 }
 
-// Publish today's prepared challenge.
+async function prepareChallenge(date) {
+  const existing = await getChallenge(date);
+
+  if (existing) {
+    console.log(`Challenge already exists for ${date}: ${existing.id}`);
+    console.log("Skipping preparation.");
+    return existing;
+  }
+
+  if (!WRITE_MODE) {
+    console.log(`DRY RUN: Would prepare challenge for ${date}`);
+    return null;
+  }
+
+  console.log(`Preparing challenge for ${date}...`);
+
+  const { data, error } = await supabase.rpc(
+    "prepare_daily_challenge",
+    { p_date: date }
+  );
+
+  if (error) {
+    const created = await getChallenge(date);
+
+    if (created) {
+      console.log(
+        `Challenge already prepared by another run: ${created.id}`
+      );
+      return created;
+    }
+
+    throw new Error(
+      `Challenge preparation failed for ${date}: ${error.message}`
+    );
+  }
+
+  const prepared = await getChallenge(date);
+
+  if (!prepared) {
+    throw new Error(
+      `Preparation returned ${data}, but no challenge was found.`
+    );
+  }
+
+  console.log(`Challenge prepared successfully: ${prepared.id}`);
+  return prepared;
+}
+
 async function publishToday(today) {
   const challenge = await getChallenge(today);
 
   if (!challenge) {
-    console.log(
-      `No challenge prepared for ${today}. Skipping publication.`
-    );
+    console.log(`No prepared challenge for ${today}.`);
     return;
   }
 
@@ -73,7 +116,6 @@ async function publishToday(today) {
   );
 
   if (error) {
-    // Another automation run may have published it.
     const updated = await getChallenge(today);
 
     if (updated?.is_active && updated?.published_at) {
@@ -90,14 +132,13 @@ async function publishToday(today) {
 
   if (!published?.is_active || !published?.published_at) {
     throw new Error(
-      "Publication RPC succeeded, but challenge is not active."
+      "Publication returned successfully, but challenge is not active."
     );
   }
 
   console.log("Today's challenge published successfully!");
 }
 
-// Run an existing Node.js script.
 function runScript(script, args = []) {
   console.log(`\nRunning ${script}...`);
 
@@ -124,12 +165,9 @@ function runScript(script, args = []) {
   console.log(`${script} completed successfully.`);
 }
 
-// Import and validate new product candidates.
 function refreshProducts() {
   if (!WRITE_MODE) {
-    console.log(
-      "DRY RUN: Would import and validate products."
-    );
+    console.log("DRY RUN: Would import and validate products.");
     return;
   }
 
@@ -137,53 +175,6 @@ function refreshProducts() {
   runScript("scripts/validate-products.mjs");
 }
 
-// Prepare tomorrow's challenge if it does not exist.
-async function prepareTomorrow(tomorrow) {
-  const existing = await getChallenge(tomorrow);
-
-  if (existing) {
-    console.log(
-      `Tomorrow's challenge already exists: ${existing.id}`
-    );
-    console.log("Skipping preparation.");
-    return;
-  }
-
-  if (!WRITE_MODE) {
-    console.log(
-      `DRY RUN: Would prepare challenge for ${tomorrow}`
-    );
-    return;
-  }
-
-  console.log(`Preparing challenge for ${tomorrow}...`);
-
-  const { data, error } = await supabase.rpc(
-    "prepare_daily_challenge",
-    { p_date: tomorrow }
-  );
-
-  if (error) {
-    // Another run may have created the same challenge.
-    const created = await getChallenge(tomorrow);
-
-    if (created) {
-      console.log(
-        `Challenge already prepared by another run: ${created.id}`
-      );
-      return;
-    }
-
-    throw new Error(
-      `Challenge preparation failed: ${error.message}`
-    );
-  }
-
-  console.log("Challenge preparation completed.");
-  console.log("Challenge ID:", data);
-}
-
-// Main daily automation.
 async function main() {
   const today = utcDate();
   const tomorrow = utcDate(1);
@@ -198,32 +189,43 @@ async function main() {
     WRITE_MODE ? "DATABASE WRITE" : "DRY RUN"
   );
 
-  // 1. Publish today's challenge first.
-  console.log("\n[1/3] Checking today's publication...");
-  await publishToday(today);
+  let failed = false;
 
-  // 2. Refresh the product database.
+  // Step 1: Recover and publish today's challenge.
+  console.log("\n[1/3] Recovering and publishing today's challenge...");
+
+  try {
+    await prepareChallenge(today);
+    await publishToday(today);
+  } catch (error) {
+    failed = true;
+    console.error("Today's challenge failed:", error);
+  }
+
+  // Step 2: Import and validate products.
   console.log("\n[2/3] Refreshing product database...");
-
-  let refreshFailed = false;
 
   try {
     refreshProducts();
   } catch (error) {
-    refreshFailed = true;
+    failed = true;
     console.error("Product refresh failed:", error);
-    console.log(
-      "Continuing with existing validated candidates."
-    );
+    console.log("Continuing with existing validated candidates.");
   }
 
-  // 3. Prepare tomorrow's challenge.
-  console.log("\n[3/3] Checking tomorrow's challenge...");
-  await prepareTomorrow(tomorrow);
+  // Step 3: Prepare tomorrow's challenge.
+  console.log("\n[3/3] Preparing tomorrow's challenge...");
 
-  if (refreshFailed) {
+  try {
+    await prepareChallenge(tomorrow);
+  } catch (error) {
+    failed = true;
+    console.error("Tomorrow's preparation failed:", error);
+  }
+
+  if (failed) {
     throw new Error(
-      "Daily automation completed, but product refresh failed."
+      "Automation finished with one or more failures. Check logs."
     );
   }
 
