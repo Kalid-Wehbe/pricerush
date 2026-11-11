@@ -1,36 +1,29 @@
 
-name: PriceRush Daily Automation
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  test-automation:
-    runs-on: ubuntu-latest
-
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Verify automation scripts
+      - name: Test Supabase connection
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          node --check scripts/import-open-prices.mjs
-          node --check scripts/validate-products.mjs
-          node --check scripts/test-daily-challenge.mjs
+          node --input-type=module -e '
+          import { createClient } from "@supabase/supabase-js";
 
-      - name: Confirm setup
-        run: echo "PriceRush automation scripts are ready!"
+          const url = process.env.SUPABASE_URL;
+          const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+          if (!url || !key) {
+            throw new Error("Missing Supabase GitHub secrets");
+          }
+
+          const supabase = createClient(url, key);
+
+          const { count, error } = await supabase
+            .from("product_candidates")
+            .select("id", { count: "exact", head: true });
+
+          if (error) {
+            throw new Error(error.message);
+          }
+
+          console.log("Supabase connection successful");
+          console.log("Product candidates:", count);
+          '
