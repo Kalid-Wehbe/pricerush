@@ -3,6 +3,11 @@ name: PriceRush Daily Automation
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '7 0 * * *'
+    - cron: '17 1 * * *'
+    - cron: '23 6 * * *'
+    - cron: '31 12 * * *'
 
 permissions:
   contents: read
