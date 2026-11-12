@@ -2,11 +2,18 @@
 import { useState, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
 
-type PlayerSetupProps = {
-  onPlayerReady: (player: { id: string; display_name: string }) => void;
+type Player = {
+  id: string;
+  display_name: string;
 };
 
-export default function PlayerSetup({ onPlayerReady }: PlayerSetupProps) {
+type PlayerSetupProps = {
+  onPlayerReady: (player: Player) => void;
+};
+
+export default function PlayerSetup({
+  onPlayerReady,
+}: PlayerSetupProps) {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -25,14 +32,14 @@ export default function PlayerSetup({ onPlayerReady }: PlayerSetupProps) {
     setError("");
 
     try {
-      let {
-        data: { user },
+      const {
+        data: { user: existingUser },
         error: authError,
       } = await supabase.auth.getUser();
 
-      if (authError) {
-        throw authError;
-      }
+      if (authError) throw authError;
+
+      let user = existingUser;
 
       if (!user) {
         const { data, error: signInError } =
@@ -47,14 +54,13 @@ export default function PlayerSetup({ onPlayerReady }: PlayerSetupProps) {
         throw new Error("Could not create your player account.");
       }
 
-      const {
-        data: existingPlayer,
-        error: lookupError,
-      } = await supabase
-        .from("players")
-        .select("id, display_name")
-        .eq("id", user.id)
-        .maybeSingle();
+      // Check whether this user already has a player profile.
+      const { data: existingPlayer, error: lookupError } =
+        await supabase
+          .from("players")
+          .select("id, display_name")
+          .eq("id", user.id)
+          .maybeSingle();
 
       if (lookupError) throw lookupError;
 
@@ -63,14 +69,13 @@ export default function PlayerSetup({ onPlayerReady }: PlayerSetupProps) {
         return;
       }
 
-      const { data: player, error: insertError } = await supabase
+      // Create a player without requesting returned columns.
+      const { error: insertError } = await supabase
         .from("players")
         .insert({
           id: user.id,
           display_name: displayName,
-        })
-        .select("id, display_name")
-        .single();
+        });
 
       if (insertError) {
         if (insertError.code === "23505") {
@@ -81,6 +86,15 @@ export default function PlayerSetup({ onPlayerReady }: PlayerSetupProps) {
 
         throw insertError;
       }
+
+      // Fetch the newly created player using SELECT permissions.
+      const { data: player, error: fetchError } = await supabase
+        .from("players")
+        .select("id, display_name")
+        .eq("id", user.id)
+        .single();
+
+      if (fetchError) throw fetchError;
 
       onPlayerReady(player);
     } catch (err) {
@@ -93,7 +107,10 @@ export default function PlayerSetup({ onPlayerReady }: PlayerSetupProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="w-full max-w-md space-y-4">
+    <form
+      onSubmit={handleSubmit}
+      className="w-full max-w-md space-y-4"
+    >
       <div>
         <label
           htmlFor="player-name"
@@ -111,11 +128,14 @@ export default function PlayerSetup({ onPlayerReady }: PlayerSetupProps) {
           minLength={3}
           maxLength={20}
           required
+          disabled={loading}
           className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white outline-none focus:border-green-500"
         />
       </div>
 
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && (
+        <p className="text-sm text-red-400">{error}</p>
+      )}
 
       <button
         type="submit"

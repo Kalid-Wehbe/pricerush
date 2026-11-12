@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import {
   ArrowRight,
   CalendarDays,
-  ChevronRight,
   Clock3,
   Flame,
   Menu,
@@ -18,6 +17,10 @@ import {
 import PlayerSetup from "./components/PlayerSetup";
 import GameScreen from "./components/GameScreen";
 import { supabase } from "./lib/supabase";
+import {
+  getDailyLeaderboard,
+  type LeaderboardEntry,
+} from "./lib/game";
 
 function App() {
   const [timeLeft, setTimeLeft] = useState("");
@@ -25,12 +28,17 @@ function App() {
   const [showGame, setShowGame] = useState(false);
   const [checkingPlayer, setCheckingPlayer] = useState(true);
 
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [leaderboardError, setLeaderboardError] = useState("");
+  const [leaderboardRefresh, setLeaderboardRefresh] = useState(0);
+
   const [player, setPlayer] = useState<{
     id: string;
     display_name: string;
   } | null>(null);
 
-  // Restore the existing player after a page refresh.
+  // Restore the existing player after refreshing the page.
   useEffect(() => {
     async function restorePlayer() {
       try {
@@ -63,6 +71,42 @@ function App() {
 
     restorePlayer();
   }, []);
+
+  // Load real leaderboard results from Supabase.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLeaderboard() {
+      setLeaderboardLoading(true);
+      setLeaderboardError("");
+
+      try {
+        const results = await getDailyLeaderboard();
+
+        if (!cancelled) {
+          setLeaderboard(results);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setLeaderboardError(
+            err instanceof Error
+              ? err.message
+              : "Could not load leaderboard."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLeaderboardLoading(false);
+        }
+      }
+    }
+
+    loadLeaderboard();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showGame, leaderboardRefresh]);
 
   // Countdown to the next UTC challenge.
   useEffect(() => {
@@ -110,11 +154,17 @@ function App() {
               Daily Challenge
             </a>
 
-            <a href="#leaderboard" className="transition hover:text-white">
+            <a
+              href="#leaderboard"
+              className="transition hover:text-white"
+            >
               Leaderboard
             </a>
 
-            <a href="#how-to-play" className="transition hover:text-white">
+            <a
+              href="#how-to-play"
+              className="transition hover:text-white"
+            >
               How to play
             </a>
           </div>
@@ -144,15 +194,24 @@ function App() {
 
         {mobileMenu && (
           <div className="flex flex-col gap-4 border-t border-white/10 px-5 py-5 text-sm text-gray-300 md:hidden">
-            <a href="#challenge" onClick={() => setMobileMenu(false)}>
+            <a
+              href="#challenge"
+              onClick={() => setMobileMenu(false)}
+            >
               Daily Challenge
             </a>
 
-            <a href="#leaderboard" onClick={() => setMobileMenu(false)}>
+            <a
+              href="#leaderboard"
+              onClick={() => setMobileMenu(false)}
+            >
               Leaderboard
             </a>
 
-            <a href="#how-to-play" onClick={() => setMobileMenu(false)}>
+            <a
+              href="#how-to-play"
+              onClick={() => setMobileMenu(false)}
+            >
               How to play
             </a>
           </div>
@@ -186,12 +245,13 @@ function App() {
           <h1 className="text-5xl font-black leading-[1.08] tracking-tight sm:text-6xl lg:text-7xl">
             Think you know
             <br />
-            what things <span className="text-green-400">cost?</span>
+            what things{" "}
+            <span className="text-green-400">cost?</span>
           </h1>
 
           <p className="mx-auto mt-6 max-w-xl text-base leading-7 text-gray-400 sm:text-lg">
-            10 real products. 10 price guesses. One chance every day. See how
-            your pricing skills stack up against the world.
+            10 real products. 10 price guesses. One chance every day.
+            See how your pricing skills stack up against the world.
           </p>
 
           <div className="mt-8 flex flex-wrap items-center justify-center gap-5 text-xs text-gray-400">
@@ -238,8 +298,8 @@ function App() {
               </h2>
 
               <p className="mt-3 max-w-md text-sm leading-6 text-gray-400">
-                From everyday essentials to expensive surprises. How accurately
-                can you guess their market value?
+                From everyday essentials to expensive surprises.
+                How accurately can you guess their market value?
               </p>
 
               <div className="mt-9 grid grid-cols-5 gap-3 sm:grid-cols-10">
@@ -355,22 +415,77 @@ function App() {
                 <span className="col-span-3 text-right">SCORE</span>
               </div>
 
-              <div className="py-10 text-center">
-                <Trophy size={30} className="mx-auto text-gray-600" />
-
-                <p className="mt-4 font-semibold text-gray-400">
-                  No leaderboard results yet
+              {leaderboardLoading ? (
+                <p className="py-10 text-center text-sm text-gray-400">
+                  Loading today's rankings...
                 </p>
-
-                <p className="mt-2 text-sm text-gray-600">
-                  Be among the first to play PriceRush!
+              ) : leaderboardError ? (
+                <p
+                  role="alert"
+                  className="py-10 text-center text-sm text-red-400"
+                >
+                  {leaderboardError}
                 </p>
-              </div>
+              ) : leaderboard.length === 0 ? (
+                <div className="py-10 text-center">
+                  <Trophy
+                    size={30}
+                    className="mx-auto text-gray-600"
+                  />
+
+                  <p className="mt-4 font-semibold text-gray-400">
+                    No leaderboard results yet
+                  </p>
+
+                  <p className="mt-2 text-sm text-gray-600">
+                    Be among the first to play PriceRush!
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-white/[0.06]">
+                  {leaderboard.map((entry, index) => (
+                    <div
+                      key={`${entry.player_rank}-${entry.display_name}-${index}`}
+                      className={`grid grid-cols-12 items-center py-4 text-sm ${
+                        player?.display_name === entry.display_name
+                          ? "text-green-400"
+                          : "text-gray-300"
+                      }`}
+                    >
+                      <span className="col-span-2 font-bold">
+                        #{entry.player_rank}
+                      </span>
+
+                      <span className="col-span-7 truncate pr-2 font-semibold">
+                        {entry.display_name}
+                        {player?.display_name === entry.display_name
+                          ? " (you)"
+                          : ""}
+                      </span>
+
+                      <span className="col-span-3 text-right font-bold tabular-nums">
+                        {Number(entry.total_score).toLocaleString(
+                          "en-US",
+                          {
+                            maximumFractionDigits: 2,
+                          }
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <button className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 py-3 text-sm font-semibold text-gray-400 transition hover:border-green-400/40 hover:text-green-400">
-              Full leaderboard coming soon
-              <ChevronRight size={16} />
+            <button
+              type="button"
+              onClick={() =>
+                setLeaderboardRefresh((value) => value + 1)
+              }
+              disabled={leaderboardLoading}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 py-3 text-sm font-semibold text-gray-400 transition hover:border-green-400/40 hover:text-green-400 disabled:opacity-50"
+            >
+              Refresh leaderboard
             </button>
           </div>
 
@@ -386,7 +501,10 @@ function App() {
               </div>
 
               <p className="mt-5 text-4xl font-black">--</p>
-              <p className="mt-2 text-sm text-gray-500">Players today</p>
+
+              <p className="mt-2 text-sm text-gray-500">
+                Players today
+              </p>
 
               <p className="mt-5 text-xs text-gray-600">
                 Statistics coming soon
@@ -402,7 +520,9 @@ function App() {
                 </span>
               </div>
 
-              <p className="mt-5 text-2xl font-bold">Coming soon</p>
+              <p className="mt-5 text-2xl font-bold">
+                Coming soon
+              </p>
 
               <p className="mt-2 text-sm text-gray-500">
                 Today's best players will be featured here.
@@ -418,7 +538,9 @@ function App() {
               SIMPLE TO PLAY
             </span>
 
-            <h2 className="mt-3 text-3xl font-bold">How it works</h2>
+            <h2 className="mt-3 text-3xl font-bold">
+              How it works
+            </h2>
 
             <p className="mt-3 text-sm text-gray-500">
               Three steps. Ten products. One daily score.
@@ -463,7 +585,9 @@ function App() {
                   </span>
                 </div>
 
-                <h3 className="mt-6 text-lg font-bold">{step.title}</h3>
+                <h3 className="mt-6 text-lg font-bold">
+                  {step.title}
+                </h3>
 
                 <p className="mt-2 text-sm leading-6 text-gray-500">
                   {step.description}
