@@ -32,29 +32,63 @@ export default function PlayerSetup({
     setError("");
 
     try {
+      // Check whether a session already exists.
       const {
-        data: { user: existingUser },
-        error: authError,
-      } = await supabase.auth.getUser();
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-      if (authError) throw authError;
+      if (sessionError) throw sessionError;
 
-      let user = existingUser;
+      let user = session?.user ?? null;
 
+      // No session? Create a new anonymous account.
       if (!user) {
         const { data, error: signInError } =
           await supabase.auth.signInAnonymously();
 
         if (signInError) throw signInError;
 
+        if (!data.session || !data.user) {
+          throw new Error(
+            "Anonymous sign-in did not create a session."
+          );
+        }
+
         user = data.user;
+      } else {
+        // Validate the existing session with Supabase.
+        const {
+          data: { user: verifiedUser },
+          error: verificationError,
+        } = await supabase.auth.getUser();
+
+        if (verificationError || !verifiedUser) {
+          // An existing session may have expired or been revoked.
+          // Clear it and create a new anonymous session.
+          const { error: signOutError } =
+            await supabase.auth.signOut({ scope: "local" });
+
+          if (signOutError) throw signOutError;
+
+          const { data, error: signInError } =
+            await supabase.auth.signInAnonymously();
+
+          if (signInError) throw signInError;
+
+          if (!data.session || !data.user) {
+            throw new Error(
+              "Could not restore your player session."
+            );
+          }
+
+          user = data.user;
+        } else {
+          user = verifiedUser;
+        }
       }
 
-      if (!user) {
-        throw new Error("Could not create your player account.");
-      }
-
-      // Check whether this user already has a player profile.
+      // Look up an existing player profile.
       const { data: existingPlayer, error: lookupError } =
         await supabase
           .from("players")
@@ -69,7 +103,7 @@ export default function PlayerSetup({
         return;
       }
 
-      // Create a player without requesting returned columns.
+      // Create a new player profile.
       const { error: insertError } = await supabase
         .from("players")
         .insert({
@@ -87,19 +121,24 @@ export default function PlayerSetup({
         throw insertError;
       }
 
-      // Fetch the newly created player using SELECT permissions.
-      const { data: player, error: fetchError } = await supabase
-        .from("players")
-        .select("id, display_name")
-        .eq("id", user.id)
-        .single();
+      // Fetch the newly created player profile.
+      const { data: player, error: fetchError } =
+        await supabase
+          .from("players")
+          .select("id, display_name")
+          .eq("id", user.id)
+          .single();
 
       if (fetchError) throw fetchError;
 
       onPlayerReady(player);
     } catch (err) {
+      console.error("Player setup failed:", err);
+
       setError(
-        err instanceof Error ? err.message : "Something went wrong."
+        err instanceof Error
+          ? err.message
+          : "Something went wrong."
       );
     } finally {
       setLoading(false);
